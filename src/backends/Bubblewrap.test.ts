@@ -61,6 +61,43 @@ describe("Bubblewrap grains", () => {
     expect((error as BwrapConflict).key).toBe("/dest")
   })
 
+  test("tmpfs on a destination already bound fails with BwrapConflict", async () => {
+    const failure = run(
+      Effect.gen(function* () {
+        yield* Bwrap.roBind("/a", "/dest")
+        yield* Bwrap.tmpfs("/dest")
+      }).pipe(Effect.flip),
+    )
+    const error = await failure
+    expect(error).toBeInstanceOf(BwrapConflict)
+    expect((error as BwrapConflict).kind).toBe("bind")
+    expect((error as BwrapConflict).key).toBe("/dest")
+  })
+
+  test("bind on a destination already tmpfs fails with BwrapConflict", async () => {
+    const failure = run(
+      Effect.gen(function* () {
+        yield* Bwrap.tmpfs("/dest")
+        yield* Bwrap.roBind("/a", "/dest")
+      }).pipe(Effect.flip),
+    )
+    const error = await failure
+    expect(error).toBeInstanceOf(BwrapConflict)
+    expect((error as BwrapConflict).kind).toBe("bind")
+  })
+
+  test("dir on a destination already bound fails with BwrapConflict", async () => {
+    const failure = run(
+      Effect.gen(function* () {
+        yield* Bwrap.roBind("/a", "/dest")
+        yield* Bwrap.dir("/dest")
+      }).pipe(Effect.flip),
+    )
+    const error = await failure
+    expect(error).toBeInstanceOf(BwrapConflict)
+    expect((error as BwrapConflict).kind).toBe("bind")
+  })
+
   test("setenv twice with the same value is idempotent", async () => {
     const config = await configOf(
       Effect.gen(function* () {
@@ -107,7 +144,7 @@ describe("Bubblewrap grains", () => {
     expect(parts[i + 2]).toBe("s3cr3t")
   })
 
-  test("describe() redacts every env value", async () => {
+  test("describe() prints setenv values in the clear but redacts secret() values", async () => {
     const config = await configOf(
       Effect.gen(function* () {
         yield* Bwrap.setenv("HOME", "/home/sandbox")
@@ -115,30 +152,61 @@ describe("Bubblewrap grains", () => {
       }),
     )
     const lines = Bwrap.describe(config)
-    expect(lines).toContain("HOME=<redacted>")
+    expect(lines).toContain("HOME=/home/sandbox")
     expect(lines).toContain("GH_TOKEN=<redacted>")
     expect(lines.join("\n")).not.toContain("s3cr3t")
-    expect(lines.join("\n")).not.toContain("/home/sandbox")
   })
 
-  test('net("none") collapses to a single --unshare-all', async () => {
+  test("net is undeclared by default and renders as deny-by-default (--unshare-all, no --share-net)", async () => {
+    const config = await configOf(Bwrap.roBind("/a"))
+    expect(config.net).toBeUndefined()
+    const buf = Bwrap.render(config)
+    const parts = buf.split("\0")
+    expect(parts).toContain("--unshare-all")
+    expect(parts).not.toContain("--share-net")
+  })
+
+  test('net("none") renders --unshare-all with no --share-net', async () => {
     const config = await configOf(Bwrap.net("none"))
     const buf = Bwrap.render(config)
     const parts = buf.split("\0")
     expect(parts).toContain("--unshare-all")
-    expect(parts).not.toContain("--unshare-net")
+    expect(parts).not.toContain("--share-net")
   })
 
-  test('net("shared") unshares user/pid/ipc/uts but keeps networking', async () => {
+  test('net("shared") renders --unshare-all plus --share-net', async () => {
     const config = await configOf(Bwrap.net("shared"))
     const buf = Bwrap.render(config)
     const parts = buf.split("\0")
-    expect(parts).not.toContain("--unshare-all")
-    expect(parts).toContain("--unshare-user")
-    expect(parts).toContain("--unshare-pid")
-    expect(parts).toContain("--unshare-ipc")
-    expect(parts).toContain("--unshare-uts")
-    expect(parts).not.toContain("--unshare-net")
+    expect(parts).toContain("--unshare-all")
+    expect(parts).toContain("--share-net")
+  })
+
+  test('net("shared") then net("shared") again is idempotent', async () => {
+    const config = await configOf(
+      Effect.gen(function* () {
+        yield* Bwrap.net("shared")
+        yield* Bwrap.net("shared")
+      }),
+    )
+    expect(config.net).toBe("shared")
+  })
+
+  test('net("shared") then net("none") fails with BwrapConflict', async () => {
+    const failure = run(
+      Effect.gen(function* () {
+        yield* Bwrap.net("shared")
+        yield* Bwrap.net("none")
+      }).pipe(Effect.flip),
+    )
+    const error = await failure
+    expect(error).toBeInstanceOf(BwrapConflict)
+    expect((error as BwrapConflict).kind).toBe("net")
+  })
+
+  test("describe() reports net=none when undeclared", async () => {
+    const config = await configOf(Bwrap.roBind("/a"))
+    expect(Bwrap.describe(config)).toContain("net=none")
   })
 
   test("tmpfs and dir grains are idempotent", async () => {
@@ -154,17 +222,70 @@ describe("Bubblewrap grains", () => {
     expect(config.dirs).toEqual(["/home/sandbox/x"])
   })
 
-  test("chdir and clearenv update config", async () => {
+  test("chdir is undeclared by default", async () => {
+    const config = await configOf(Bwrap.roBind("/a"))
+    expect(config.chdir).toBeUndefined()
+  })
+
+  test("chdir twice with the same value is idempotent", async () => {
     const config = await configOf(
       Effect.gen(function* () {
         yield* Bwrap.chdir("/home/sandbox")
-        yield* Bwrap.clearenv()
+        yield* Bwrap.chdir("/home/sandbox")
       }),
     )
     expect(config.chdir).toBe("/home/sandbox")
+  })
+
+  test("chdir twice with different values fails with BwrapConflict", async () => {
+    const failure = run(
+      Effect.gen(function* () {
+        yield* Bwrap.chdir("/home/sandbox")
+        yield* Bwrap.chdir("/workspace")
+      }).pipe(Effect.flip),
+    )
+    const error = await failure
+    expect(error).toBeInstanceOf(BwrapConflict)
+    expect((error as BwrapConflict).kind).toBe("chdir")
+  })
+
+  test("clearenv is undeclared by default but renders --clearenv (deny-by-default)", async () => {
+    const config = await configOf(Bwrap.roBind("/a"))
+    expect(config.clearenv).toBeUndefined()
+    const buf = Bwrap.render(config)
+    expect(buf.split("\0")).toContain("--clearenv")
+  })
+
+  test("clearenv() declared explicitly also renders --clearenv", async () => {
+    const config = await configOf(Bwrap.clearenv())
     expect(config.clearenv).toBe(true)
     const buf = Bwrap.render(config)
     expect(buf.split("\0")).toContain("--clearenv")
+  })
+
+  test("clearenv() twice is idempotent", async () => {
+    const config = await configOf(
+      Effect.gen(function* () {
+        yield* Bwrap.clearenv()
+        yield* Bwrap.clearenv()
+      }),
+    )
+    expect(config.clearenv).toBe(true)
+  })
+
+  test("render emits --clearenv before any --setenv (ordering regression)", async () => {
+    const config = await configOf(
+      Effect.gen(function* () {
+        yield* Bwrap.setenv("HOME", "/home/sandbox")
+        yield* Bwrap.clearenv()
+      }),
+    )
+    const parts = Bwrap.render(config).split("\0")
+    const clearenvIndex = parts.indexOf("--clearenv")
+    const setenvIndex = parts.indexOf("--setenv")
+    expect(clearenvIndex).toBeGreaterThanOrEqual(0)
+    expect(setenvIndex).toBeGreaterThanOrEqual(0)
+    expect(clearenvIndex).toBeLessThan(setenvIndex)
   })
 
   test("render encodes options only — no COMMAND or -- terminator", async () => {
@@ -183,5 +304,21 @@ describe("Bubblewrap grains", () => {
     const config = await configOf(Bwrap.roBind("/a"))
     const buf = Bwrap.render(config)
     expect(buf.split("\0")).toContain("--die-with-parent")
+  })
+
+  test("workspace() rw-binds the host path to /workspace and chdirs into it", async () => {
+    const config = await configOf(Bwrap.workspace("/host/project"))
+    expect(config.binds).toContainEqual({ mode: "rw", src: "/host/project", dest: "/workspace" })
+    expect(config.chdir).toBe("/workspace")
+  })
+
+  test("workspace() applied twice with the same host path is idempotent", async () => {
+    const config = await configOf(
+      Effect.gen(function* () {
+        yield* Bwrap.workspace("/host/project")
+        yield* Bwrap.workspace("/host/project")
+      }),
+    )
+    expect(config.binds).toHaveLength(1)
   })
 })

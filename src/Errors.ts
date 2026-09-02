@@ -1,5 +1,4 @@
 import { Data } from "effect"
-import type { ConfigError } from "effect/ConfigError"
 
 /**
  * Raised when two grains disagree about a bind destination or an env var
@@ -8,7 +7,7 @@ import type { ConfigError } from "effect/ConfigError"
  * fails loud instead.
  */
 export class BwrapConflict extends Data.TaggedError("BwrapConflict")<{
-  readonly kind: "bind" | "env"
+  readonly kind: "bind" | "env" | "net" | "chdir" | "clearenv"
   readonly key: string
   readonly existing: string
   readonly incoming: string
@@ -19,4 +18,7 @@ export class NixError extends Data.TaggedError("NixError")<{
   readonly detail: string
 }> {}
 
-export type GhError = BwrapConflict | NixError | ConfigError
+/** Raised when `Sandbox.sand().exec` is called with an empty `argv` — there's no COMMAND to hand bwrap, so this fails before ever spawning it rather than letting bwrap's own execvp report a cryptic error on an empty string. */
+export class EmptyCommandError extends Data.TaggedError("EmptyCommandError")<{}> {}
+
+export type GhError = BwrapConflict | NixError

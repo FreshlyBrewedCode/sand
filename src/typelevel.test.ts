@@ -4,7 +4,7 @@
  * nothing at runtime, so `bun test` picking this file up (it matches
  * `*.test.ts`) is harmless: zero tests, zero side effects.
  *
- * `gh`'s requirement channel is `Bubblewrap | NixStore`. Providing only
+ * `gh()`'s requirement channel is `Bubblewrap | NixStore`. Providing only
  * `Bubblewrap.Default` must leave `NixStore` unsatisfied. If a future
  * refactor accidentally lets `Gh.ts` compose without really needing
  * `NixStore`, this file stops typechecking (an unused `@ts-expect-error`
@@ -15,7 +15,7 @@ import type { Effect } from "effect"
 import type { Bubblewrap } from "./backends/Bubblewrap.js"
 import type { gh } from "./tools/Gh.js"
 
-type GhRequirements = typeof gh extends Effect.Effect<infer _A, infer _E, infer R> ? R : never
+type GhRequirements = ReturnType<typeof gh> extends Effect.Effect<infer _A, infer _E, infer R> ? R : never
 type RemainingAfterProvidingOnlyBubblewrap = Exclude<GhRequirements, Bubblewrap>
 
 type RequireNever<R extends never> = R
